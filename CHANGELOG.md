@@ -1,10 +1,11 @@
-# Unreleased (fork: izerok/Mos)
+## Unreleased (fork: izerok/Mos)
 
 ## 新功能
 - 按键 binding 新增「作用 App」配置 (白名单/黑名单)。在 偏好设置 → 按键 页面右上角点 「Application Scope…」 打开配置弹窗, 可指定哪些 App 内按键映射生效。
+- 作用范围只对 **鼠标按键** 触发的 binding 生效; 键盘键触发的 binding 仍然全局执行 (避免破坏 mouse-button-as-modifier 注入到键盘事件的链路)。
 
 ## ⚠️ 升级行为变化
-- 默认模式为「白名单 + 空列表」, 这意味着 **升级后按键映射默认全局失效**, 直到你在 Application Scope 里手动添加 App, 或把模式切到「黑名单」恢复原来的全局生效行为。
+- 默认模式为「白名单 + 空列表」, 这意味着 **升级后鼠标按键映射默认全局失效**, 直到你在 Application Scope 里手动添加 App, 或把模式切到「黑名单」恢复原来的全局生效行为。
 - 数据不会丢失: 已有 ButtonBinding 仍然存在, 切回 黑名单 模式即可全局复用。
 
 ---

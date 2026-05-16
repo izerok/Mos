@@ -55,31 +55,33 @@ class ButtonCore {
         // 使用原始 flags 匹配绑定 (不注入虚拟修饰键, 保证匹配准确)
         let mosEvent = InputEvent(fromCGEvent: event)
 
-        // 应用作用域守门: 决定本事件是否进入 binding dispatch.
-        // Down 时按"目标 App"判定并缓存; Up 时复用 Down 的判定 (按住-切窗-松开场景).
-        let allowedToDispatch: Bool
-        if mosEvent.phase == .down {
-            let targetApp = ScrollUtils.shared.getRunningApplication(from: event)
-                ?? NSWorkspace.shared.frontmostApplication
-            allowedToDispatch = ButtonUtils.shared.shouldDispatch(for: targetApp)
-            ButtonUtils.shared.recordDispatchDecision(
-                type: mosEvent.type, code: mosEvent.code, allowed: allowedToDispatch
-            )
-        } else {
-            // Up 事件: 优先使用按下时的判定; 没有 (孤儿 Up) 则按当前目标判.
-            if let recorded = ButtonUtils.shared.consumeDispatchDecision(
-                type: mosEvent.type, code: mosEvent.code
-            ) {
-                allowedToDispatch = recorded
-            } else {
+        // 应用作用域守门: 仅作用于"鼠标按键" binding.
+        // 键盘事件必须放行进入 InputProcessor, 否则虚拟修饰键 flags 注入会失效
+        // (此 tap 还承担 mouse-button-bound 修饰键的 flag 注入到 passthrough 键盘事件的职责).
+        if mosEvent.type == .mouse {
+            let allowedToDispatch: Bool
+            if mosEvent.phase == .down {
                 let targetApp = ScrollUtils.shared.getRunningApplication(from: event)
                     ?? NSWorkspace.shared.frontmostApplication
                 allowedToDispatch = ButtonUtils.shared.shouldDispatch(for: targetApp)
+                ButtonUtils.shared.recordDispatchDecision(
+                    type: mosEvent.type, code: mosEvent.code, allowed: allowedToDispatch
+                )
+            } else {
+                // Up 事件: 优先使用按下时的判定; 没有 (孤儿 Up) 则按当前目标判.
+                if let recorded = ButtonUtils.shared.consumeDispatchDecision(
+                    type: mosEvent.type, code: mosEvent.code
+                ) {
+                    allowedToDispatch = recorded
+                } else {
+                    let targetApp = ScrollUtils.shared.getRunningApplication(from: event)
+                        ?? NSWorkspace.shared.frontmostApplication
+                    allowedToDispatch = ButtonUtils.shared.shouldDispatch(for: targetApp)
+                }
             }
-        }
-        guard allowedToDispatch else {
-            // 透传事件, 不执行 binding
-            return Unmanaged.passUnretained(event)
+            guard allowedToDispatch else {
+                return Unmanaged.passUnretained(event)
+            }
         }
 
         let result = InputProcessor.shared.process(mosEvent)
