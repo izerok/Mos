@@ -50,8 +50,14 @@ class PreferencesButtonsViewController: NSViewController {
     private var activityPopoverContent: ActivityPopoverViewController?
     /// popover 展示期间的轮询 timer; 关闭时必须 invalidate.
     private var activityPopoverPollTimer: Timer?
-    /// spinner 上的 tracking area, bounds 变化时需重建.
+    /// spinner 上的 tracking area, 当 bounds 变化时需重建.
     private var activityTrackingArea: NSTrackingArea?
+
+    // MARK: - Application Scope (programmatic)
+    /// 弹出"作用 App"配置的触发按钮 (右上角, 程序化追加, 不依赖 storyboard).
+    private var scopeButton: NSButton?
+    /// 持有 popover 防止显示后立即释放.
+    private var scopePopover: NSPopover?
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -63,6 +69,8 @@ class PreferencesButtonsViewController: NSViewController {
         loadOptionsToView()
         // 指示器: tooltip + 订阅 Manager 活动状态变化通知
         setupActivityIndicator()
+        // 应用作用域: 程序化追加触发按钮 (右上角, 不动现有 storyboard 布局)
+        setupApplicationScopeButton()
     }
 
     override func viewWillAppear() {
@@ -564,5 +572,48 @@ extension PreferencesButtonsViewController: KeyRecorderDelegate {
         let recordedEvent = RecordedEvent(from: event)
         let diagnosis = LogiCenter.shared.buttonCaptureDiagnosis(forMosCode: event.code)
         return recordedEvent.normalizedForButtonBinding(diagnosis: diagnosis)
+    }
+}
+
+// MARK: - Application Scope (per-app whitelist/blacklist)
+extension PreferencesButtonsViewController {
+
+    /// 在视图右上角添加触发按钮; 不修改 storyboard 上已有的布局.
+    fileprivate func setupApplicationScopeButton() {
+        let button = NSButton()
+        button.translatesAutoresizingMaskIntoConstraints = false
+        button.bezelStyle = .rounded
+        button.controlSize = .small
+        button.font = .systemFont(ofSize: 11)
+        button.title = NSLocalizedString(
+            "Application Scope…",
+            comment: "Button on Buttons preferences page to open the per-app whitelist/blacklist popover"
+        )
+        button.target = self
+        button.action = #selector(showApplicationScopePopover(_:))
+        button.toolTip = NSLocalizedString(
+            "Configure which apps the button bindings apply to",
+            comment: "Tooltip for the per-app scope button"
+        )
+        view.addSubview(button)
+        NSLayoutConstraint.activate([
+            button.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -12),
+            button.topAnchor.constraint(equalTo: view.topAnchor, constant: 12),
+        ])
+        scopeButton = button
+    }
+
+    @objc fileprivate func showApplicationScopePopover(_ sender: NSButton) {
+        // 已有 popover 在显示则切换关闭, 避免重复弹出.
+        if let existing = scopePopover, existing.isShown {
+            existing.performClose(nil)
+            scopePopover = nil
+            return
+        }
+        let popover = NSPopover()
+        popover.behavior = .transient
+        popover.contentViewController = ButtonScopePopoverViewController()
+        popover.show(relativeTo: sender.bounds, of: sender, preferredEdge: .maxY)
+        scopePopover = popover
     }
 }

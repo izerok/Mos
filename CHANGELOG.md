@@ -1,3 +1,14 @@
+# Unreleased (fork: izerok/Mos)
+
+## 新功能
+- 按键 binding 新增「作用 App」配置 (白名单/黑名单)。在 偏好设置 → 按键 页面右上角点 「Application Scope…」 打开配置弹窗, 可指定哪些 App 内按键映射生效。
+
+## ⚠️ 升级行为变化
+- 默认模式为「白名单 + 空列表」, 这意味着 **升级后按键映射默认全局失效**, 直到你在 Application Scope 里手动添加 App, 或把模式切到「黑名单」恢复原来的全局生效行为。
+- 数据不会丢失: 已有 ButtonBinding 仍然存在, 切回 黑名单 模式即可全局复用。
+
+---
+
 # [4.2.0](https://github.com/Caldis/Mos/releases/tag/4.2.0)
 
 ## 新功能

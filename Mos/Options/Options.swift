@@ -40,6 +40,8 @@ struct OptionItem {
 
     struct Button {
         static let Bindings = "buttonBindings"
+        static let Allowlist = "buttonAllowlist"
+        static let Applications = "buttonApplications"
     }
 
     struct Application {
@@ -137,6 +139,13 @@ extension Options {
         // 按钮绑定
         buttons.binding = loadButtonsData()
         ButtonUtils.shared.invalidateCache()
+        // 按钮: 应用作用域 (首启缺失则使用默认值: allowlist=true, applications=[])
+        if UserDefaults.standard.object(forKey: OptionItem.Button.Allowlist) == nil {
+            buttons.allowlist = true
+        } else {
+            buttons.allowlist = UserDefaults.standard.bool(forKey: OptionItem.Button.Allowlist)
+        }
+        buttons.applications = loadButtonApplicationsData()
         // 应用
         application.allowlist = UserDefaults.standard.bool(forKey: OptionItem.Application.Allowlist)
         application.applications = loadApplicationsData()
@@ -180,6 +189,38 @@ extension Options {
             }
             // 按钮绑定
             saveButtonBindingsData()
+            // 按钮: 应用作用域
+            UserDefaults.standard.set(buttons.allowlist, forKey: OptionItem.Button.Allowlist)
+            saveButtonApplicationsData()
+        }
+    }
+
+    // 安全加载按钮应用作用域列表
+    private func loadButtonApplicationsData() -> [String] {
+        let rawValue = UserDefaults.standard.object(forKey: OptionItem.Button.Applications)
+        guard let data = rawValue as? Data else {
+            if rawValue != nil {
+                NSLog("Button applications data has wrong type: \(type(of: rawValue)), clearing")
+                UserDefaults.standard.removeObject(forKey: OptionItem.Button.Applications)
+            }
+            return []
+        }
+        do {
+            return try decoder.decode([String].self, from: data)
+        } catch {
+            NSLog("Failed to decode button applications data: \(error), resetting to empty")
+            UserDefaults.standard.removeObject(forKey: OptionItem.Button.Applications)
+            return []
+        }
+    }
+
+    // 保存按钮应用作用域列表
+    private func saveButtonApplicationsData() {
+        do {
+            let data = try encoder.encode(buttons.applications)
+            UserDefaults.standard.set(data, forKey: OptionItem.Button.Applications)
+        } catch {
+            NSLog("Failed to encode button applications data: \(error), skipping save")
         }
     }
 
