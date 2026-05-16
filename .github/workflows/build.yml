@@ -1,0 +1,94 @@
+name: Build
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - "Mos/**"
+      - "MosTests/**"
+      - "Mos.xcodeproj/**"
+      - ".github/workflows/build.yml"
+  pull_request:
+    branches:
+      - master
+  workflow_dispatch:
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build & Test (macOS)
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show toolchain info
+        run: |
+          sw_vers
+          xcodebuild -version
+          xcode-select -p
+          swift --version
+
+      - name: Resolve Swift Package dependencies
+        run: |
+          xcodebuild \
+            -resolvePackageDependencies \
+            -project Mos.xcodeproj \
+            -scheme Debug
+
+      - name: Build (Debug, code signing disabled)
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project Mos.xcodeproj \
+            -scheme Debug \
+            -configuration Debug \
+            -destination 'platform=macOS' \
+            -derivedDataPath build/DerivedData \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGN_ENTITLEMENTS="" \
+            DEVELOPMENT_TEAM="" \
+            ONLY_ACTIVE_ARCH=NO \
+            build
+
+      - name: Run tests
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project Mos.xcodeproj \
+            -scheme Debug \
+            -destination 'platform=macOS' \
+            -derivedDataPath build/DerivedData \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGN_ENTITLEMENTS="" \
+            DEVELOPMENT_TEAM="" \
+            test
+
+      - name: Locate built app
+        id: locate
+        run: |
+          APP_PATH=$(find build/DerivedData/Build/Products -maxdepth 3 -name "Mos.app" -type d | head -1)
+          if [ -z "$APP_PATH" ]; then
+            echo "Mos.app not found"
+            exit 1
+          fi
+          echo "Found app at: $APP_PATH"
+          ls -la "$APP_PATH/Contents/MacOS/" || true
+          echo "app_path=$APP_PATH" >> "$GITHUB_OUTPUT"
+
+      - name: Upload built .app
+        uses: actions/upload-artifact@v4
+        with:
+          name: Mos-Debug-app
+          path: ${{ steps.locate.outputs.app_path }}
+          retention-days: 14
+          if-no-files-found: error
