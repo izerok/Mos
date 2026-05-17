@@ -53,10 +53,8 @@ class PreferencesButtonsViewController: NSViewController {
     /// spinner 上的 tracking area, 当 bounds 变化时需重建.
     private var activityTrackingArea: NSTrackingArea?
 
-    // MARK: - Application Scope (programmatic)
-    /// 弹出"作用 App"配置的触发按钮 (右上角, 程序化追加, 不依赖 storyboard).
-    private var scopeButton: NSButton?
-    /// 持有 popover 防止显示后立即释放.
+    // MARK: - Per-binding Application Scope popover (programmatic)
+    /// 当前打开的 per-binding scope popover; 用于行级"Apps (N)"按钮.
     private var scopePopover: NSPopover?
 
     override func viewDidLoad() {
@@ -69,8 +67,6 @@ class PreferencesButtonsViewController: NSViewController {
         loadOptionsToView()
         // 指示器: tooltip + 订阅 Manager 活动状态变化通知
         setupActivityIndicator()
-        // 应用作用域: 程序化追加触发按钮 (右上角, 不动现有 storyboard 布局)
-        setupApplicationScopeButton()
     }
 
     override func viewWillAppear() {
@@ -329,6 +325,9 @@ extension PreferencesButtonsViewController: NSTableViewDelegate, NSTableViewData
                 },
                 onBindingUpdated: { [weak self] updated in
                     self?.replaceButtonBinding(updated)
+                },
+                onScopeRequested: { [weak self] sourceView in
+                    self?.presentScopePopover(forBindingID: binding.id, relativeTo: sourceView)
                 }
             )
             return cell
@@ -575,45 +574,18 @@ extension PreferencesButtonsViewController: KeyRecorderDelegate {
     }
 }
 
-// MARK: - Application Scope (per-app whitelist/blacklist)
+// MARK: - Per-binding scope popover
 extension PreferencesButtonsViewController {
-
-    /// 在视图右上角添加触发按钮; 不修改 storyboard 上已有的布局.
-    fileprivate func setupApplicationScopeButton() {
-        let button = NSButton()
-        button.translatesAutoresizingMaskIntoConstraints = false
-        button.bezelStyle = .rounded
-        button.controlSize = .small
-        button.font = .systemFont(ofSize: 11)
-        button.title = NSLocalizedString(
-            "Application Scope…",
-            comment: "Button on Buttons preferences page to open the per-app whitelist/blacklist popover"
-        )
-        button.target = self
-        button.action = #selector(showApplicationScopePopover(_:))
-        button.toolTip = NSLocalizedString(
-            "Configure which apps the button bindings apply to",
-            comment: "Tooltip for the per-app scope button"
-        )
-        view.addSubview(button)
-        NSLayoutConstraint.activate([
-            button.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -12),
-            button.topAnchor.constraint(equalTo: view.topAnchor, constant: 12),
-        ])
-        scopeButton = button
-    }
-
-    @objc fileprivate func showApplicationScopePopover(_ sender: NSButton) {
-        // 已有 popover 在显示则切换关闭, 避免重复弹出.
+    /// 由 ButtonTableCellView 行内"Apps (N)"按钮触发, 弹出该 binding 的 scope 编辑界面.
+    fileprivate func presentScopePopover(forBindingID id: UUID, relativeTo source: NSView) {
         if let existing = scopePopover, existing.isShown {
             existing.performClose(nil)
             scopePopover = nil
-            return
         }
         let popover = NSPopover()
         popover.behavior = .transient
-        popover.contentViewController = ButtonScopePopoverViewController()
-        popover.show(relativeTo: sender.bounds, of: sender, preferredEdge: .maxY)
+        popover.contentViewController = ButtonScopePopoverViewController(bindingID: id)
+        popover.show(relativeTo: source.bounds, of: source, preferredEdge: .maxY)
         scopePopover = popover
     }
 }

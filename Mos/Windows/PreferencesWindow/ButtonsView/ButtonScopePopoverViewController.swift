@@ -1,8 +1,8 @@
 //
 //  ButtonScopePopoverViewController.swift
 //  Mos
-//  按键 binding 的应用作用域 (白名单/黑名单) 配置 popover.
-//  程序化 UI, 不依赖 storyboard.
+//  Per-binding 应用作用域 (白名单/黑名单) 编辑 popover.
+//  程序化 UI, 不依赖 storyboard. 直接读写指定 binding 的 scope 字段.
 //
 
 import Cocoa
@@ -10,14 +10,50 @@ import Cocoa
 class ButtonScopePopoverViewController: NSViewController,
     NSTableViewDelegate, NSTableViewDataSource {
 
+    // MARK: - Subject
+
+    /// 编辑目标 binding 的 ID. popover 通过 ID 查 Options.shared.buttons.binding,
+    /// 避免持有可能被替换 (struct copy) 的旧版本.
+    private let bindingID: UUID
+
+    init(bindingID: UUID) {
+        self.bindingID = bindingID
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) is not supported, use init(bindingID:)")
+    }
+
     // MARK: - Subviews
 
+    private let titleLabel = NSTextField(labelWithString: "")
     private let modeControl = NSSegmentedControl()
     private let scrollView = NSScrollView()
     private let tableView = NSTableView()
     private let addButton = NSButton()
     private let removeButton = NSButton()
     private let emptyHintLabel = NSTextField(labelWithString: "")
+
+    // MARK: - 当前 binding 访问辅助
+
+    private func currentBinding() -> ButtonBinding? {
+        return Options.shared.buttons.binding.first(where: { $0.id == bindingID })
+    }
+
+    private func currentBindingIndex() -> Int? {
+        return Options.shared.buttons.binding.firstIndex(where: { $0.id == bindingID })
+    }
+
+    private func mutate(_ block: (inout ButtonBinding) -> Void) {
+        guard let idx = currentBindingIndex() else { return }
+        // struct 数组中修改单个元素: 必须先取出 → 改 → 整体写回, 才能触发 didSet 保存
+        var bindings = Options.shared.buttons.binding
+        block(&bindings[idx])
+        Options.shared.buttons.binding = bindings
+        ButtonUtils.shared.invalidateCache()
+    }
 
     // MARK: - Lifecycle
 
@@ -26,13 +62,14 @@ class ButtonScopePopoverViewController: NSViewController,
         v.translatesAutoresizingMaskIntoConstraints = false
         view = v
 
+        configureTitle()
         configureMode()
         configureTable()
         configureBottomBar()
         configureEmptyHint()
         layoutSubviews()
 
-        syncFromOptions()
+        syncFromBinding()
     }
 
     override func viewWillAppear() {
@@ -42,28 +79,34 @@ class ButtonScopePopoverViewController: NSViewController,
         updateEmptyHintVisibility()
     }
 
-    // MARK: - Layout
+    // MARK: - Build subviews
+
+    private func configureTitle() {
+        titleLabel.translatesAutoresizingMaskIntoConstraints = false
+        titleLabel.font = .systemFont(ofSize: 11)
+        titleLabel.textColor = .secondaryLabelColor
+        titleLabel.lineBreakMode = .byTruncatingTail
+        view.addSubview(titleLabel)
+    }
 
     private func configureMode() {
         modeControl.translatesAutoresizingMaskIntoConstraints = false
         modeControl.segmentStyle = .rounded
         modeControl.segmentCount = 2
-        modeControl.setLabel(NSLocalizedString("Whitelist", comment: "Mode toggle: only apply bindings in listed apps"), forSegment: 0)
-        modeControl.setLabel(NSLocalizedString("Blacklist", comment: "Mode toggle: disable bindings in listed apps"), forSegment: 1)
+        modeControl.setLabel(NSLocalizedString("Whitelist", comment: "Only fire in listed apps"), forSegment: 0)
+        modeControl.setLabel(NSLocalizedString("Blacklist", comment: "Disable in listed apps"), forSegment: 1)
         modeControl.target = self
         modeControl.action = #selector(modeChanged(_:))
         view.addSubview(modeControl)
     }
 
     private func configureTable() {
-        // Scroll container
         scrollView.translatesAutoresizingMaskIntoConstraints = false
         scrollView.hasVerticalScroller = true
         scrollView.borderType = .lineBorder
         scrollView.autohidesScrollers = true
         view.addSubview(scrollView)
 
-        // Table
         tableView.headerView = nil
         tableView.rowHeight = 28
         tableView.intercellSpacing = NSSize(width: 0, height: 2)
@@ -103,8 +146,8 @@ class ButtonScopePopoverViewController: NSViewController,
     private func configureEmptyHint() {
         emptyHintLabel.translatesAutoresizingMaskIntoConstraints = false
         emptyHintLabel.stringValue = NSLocalizedString(
-            "No apps added — button bindings will not fire",
-            comment: "Hint when whitelist mode is on but the list is empty"
+            "Whitelist + no apps — this binding will not fire anywhere",
+            comment: "Hint when whitelist mode is on but the per-binding app list is empty"
         )
         emptyHintLabel.font = .systemFont(ofSize: 11)
         emptyHintLabel.textColor = .secondaryLabelColor
@@ -117,9 +160,13 @@ class ButtonScopePopoverViewController: NSViewController,
     private func layoutSubviews() {
         NSLayoutConstraint.activate([
             view.widthAnchor.constraint(equalToConstant: 340),
-            view.heightAnchor.constraint(equalToConstant: 280),
+            view.heightAnchor.constraint(equalToConstant: 300),
 
-            modeControl.topAnchor.constraint(equalTo: view.topAnchor, constant: 12),
+            titleLabel.topAnchor.constraint(equalTo: view.topAnchor, constant: 10),
+            titleLabel.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 12),
+            titleLabel.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -12),
+
+            modeControl.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 8),
             modeControl.centerXAnchor.constraint(equalTo: view.centerXAnchor),
 
             scrollView.topAnchor.constraint(equalTo: modeControl.bottomAnchor, constant: 12),
@@ -146,17 +193,28 @@ class ButtonScopePopoverViewController: NSViewController,
 
     // MARK: - State sync
 
-    private func syncFromOptions() {
-        modeControl.selectedSegment = Options.shared.buttons.allowlist ? 0 : 1
+    private func syncFromBinding() {
+        guard let binding = currentBinding() else {
+            titleLabel.stringValue = NSLocalizedString("Binding no longer exists", comment: "Title when binding was deleted")
+            modeControl.selectedSegment = 1
+            updateEmptyHintVisibility()
+            return
+        }
+        let trigger = binding.triggerEvent.displayComponents.joined(separator: " ")
+        let action = binding.systemShortcut?.title ?? binding.systemShortcutName
+        let fmt = NSLocalizedString("Scope for %@ → %@", comment: "Title: trigger → action")
+        titleLabel.stringValue = String(format: fmt, trigger, action)
+        modeControl.selectedSegment = binding.allowlist ? 0 : 1
         updateEmptyHintVisibility()
         updateRemoveButtonState()
     }
 
     private func updateEmptyHintVisibility() {
-        let isEmpty = Options.shared.buttons.applications.isEmpty
-        let isWhitelist = Options.shared.buttons.allowlist
-        // 只在"白名单+空列表"时显示提示 (这时 binding 完全不生效, 容易让用户困惑).
-        emptyHintLabel.isHidden = !(isEmpty && isWhitelist)
+        guard let binding = currentBinding() else {
+            emptyHintLabel.isHidden = true
+            return
+        }
+        emptyHintLabel.isHidden = !(binding.applications.isEmpty && binding.allowlist)
     }
 
     private func updateRemoveButtonState() {
@@ -166,7 +224,7 @@ class ButtonScopePopoverViewController: NSViewController,
     // MARK: - Actions
 
     @objc private func modeChanged(_ sender: NSSegmentedControl) {
-        Options.shared.buttons.allowlist = (sender.selectedSegment == 0)
+        mutate { $0.allowlist = (sender.selectedSegment == 0) }
         updateEmptyHintVisibility()
     }
 
@@ -178,14 +236,16 @@ class ButtonScopePopoverViewController: NSViewController,
         panel.directoryURL = FileManager.default.urls(for: .applicationDirectory, in: .localDomainMask).first
         guard let window = view.window else { return }
         panel.beginSheetModal(for: window) { [weak self] response in
-            guard let self = self, response == .OK, let url = panel.url else { return }
+            guard let self = self,
+                  response == .OK,
+                  let url = panel.url else { return }
             let path = url.path
-            var list = Options.shared.buttons.applications
-            if !list.contains(path) {
-                list.append(path)
-                Options.shared.buttons.applications = list   // 显式赋值, 确保 didSet 触发保存
-                self.tableView.reloadData()
+            self.mutate { binding in
+                if !binding.applications.contains(path) {
+                    binding.applications.append(path)
+                }
             }
+            self.tableView.reloadData()
             self.updateEmptyHintVisibility()
             self.updateRemoveButtonState()
         }
@@ -193,10 +253,12 @@ class ButtonScopePopoverViewController: NSViewController,
 
     @objc private func removeApplication(_ sender: NSButton) {
         let row = tableView.selectedRow
-        guard row >= 0, row < Options.shared.buttons.applications.count else { return }
-        var list = Options.shared.buttons.applications
-        list.remove(at: row)
-        Options.shared.buttons.applications = list   // 显式赋值, 确保 didSet 触发保存
+        guard row >= 0,
+              let binding = currentBinding(),
+              row < binding.applications.count else { return }
+        mutate { binding in
+            binding.applications.remove(at: row)
+        }
         tableView.reloadData()
         updateEmptyHintVisibility()
         updateRemoveButtonState()
@@ -205,12 +267,12 @@ class ButtonScopePopoverViewController: NSViewController,
     // MARK: - NSTableViewDataSource / Delegate
 
     func numberOfRows(in tableView: NSTableView) -> Int {
-        return Options.shared.buttons.applications.count
+        return currentBinding()?.applications.count ?? 0
     }
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
-        guard row < Options.shared.buttons.applications.count else { return nil }
-        let path = Options.shared.buttons.applications[row]
+        guard let binding = currentBinding(), row < binding.applications.count else { return nil }
+        let path = binding.applications[row]
 
         let cell = NSTableCellView()
         let imageView = NSImageView()

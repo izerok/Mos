@@ -272,6 +272,14 @@ struct ButtonBinding: Codable, Equatable {
     /// "打开应用" 动作的结构化载荷; 仅当 systemShortcutName == openTargetSentinel 时非 nil.
     let openTarget: OpenTargetPayload?
 
+    /// 应用作用域模式: true=白名单 (仅在 applications 列出的 App 中生效),
+    /// false=黑名单 (在 applications 列出的 App 中禁用, 其他 App 生效).
+    /// 默认 true + 空列表 (即"什么都不触发"), 用户必须显式配置 scope.
+    var allowlist: Bool
+
+    /// 应用作用域列表: bundle path 或 executable path 字符串.
+    var applications: [String]
+
     // MARK: - 瞬态缓存字段 (不参与编解码)
 
     /// 缓存的自定义按键码
@@ -286,7 +294,8 @@ struct ButtonBinding: Codable, Equatable {
     // MARK: - CodingKeys (仅编码持久化字段)
 
     enum CodingKeys: String, CodingKey {
-        case id, triggerEvent, systemShortcutName, isEnabled, createdAt, openTarget
+        case id, triggerEvent, systemShortcutName, isEnabled, createdAt, openTarget,
+             allowlist, applications
     }
 
     // MARK: - 计算属性
@@ -303,17 +312,25 @@ struct ButtonBinding: Codable, Equatable {
 
     // MARK: - 初始化
 
+    /// 新 binding 默认 `allowlist=false + applications=[]` = "在所有 App 中生效".
+    /// 用户可通过行内 "Apps (N)" 按钮切到白名单模式并指定 App.
+    /// 注意: 旧版 JSON 解码时 (init(from:)) 默认 `allowlist=true`,
+    /// 用于升级场景, 强制用户显式配置 scope 才能让 binding 生效.
     init(id: UUID = UUID(),
          triggerEvent: RecordedEvent,
          systemShortcutName: String,
          isEnabled: Bool = true,
-         createdAt: Date = Date()) {
+         createdAt: Date = Date(),
+         allowlist: Bool = false,
+         applications: [String] = []) {
         self.id = id
         self.triggerEvent = triggerEvent
         self.systemShortcutName = systemShortcutName
         self.isEnabled = isEnabled
         self.createdAt = createdAt
         self.openTarget = nil
+        self.allowlist = allowlist
+        self.applications = applications
     }
 
     /// "打开应用" 动作专用初始化器, 强制保证 sentinel 与 payload 一致.
@@ -321,13 +338,17 @@ struct ButtonBinding: Codable, Equatable {
          triggerEvent: RecordedEvent,
          openTarget: OpenTargetPayload,
          isEnabled: Bool = true,
-         createdAt: Date = Date()) {
+         createdAt: Date = Date(),
+         allowlist: Bool = false,
+         applications: [String] = []) {
         self.id = id
         self.triggerEvent = triggerEvent
         self.systemShortcutName = Self.openTargetSentinel
         self.openTarget = openTarget
         self.isEnabled = isEnabled
         self.createdAt = createdAt
+        self.allowlist = allowlist
+        self.applications = applications
     }
 
     func standardMouseAliasBindingIfAvailable() -> ButtonBinding? {
@@ -341,7 +362,9 @@ struct ButtonBinding: Codable, Equatable {
                 triggerEvent: triggerEvent,
                 openTarget: payload,
                 isEnabled: isEnabled,
-                createdAt: createdAt
+                createdAt: createdAt,
+                allowlist: allowlist,
+                applications: applications
             )
         }
 
@@ -350,8 +373,38 @@ struct ButtonBinding: Codable, Equatable {
             triggerEvent: triggerEvent,
             systemShortcutName: systemShortcutName,
             isEnabled: isEnabled,
-            createdAt: createdAt
+            createdAt: createdAt,
+            allowlist: allowlist,
+            applications: applications
         )
+    }
+
+    // MARK: - 应用作用域判定
+
+    /// 判断当前 binding 是否在给定 App 中应该执行.
+    /// 严格模式: 未知 App (path 全为 nil) 视为"不在列表".
+    /// - 白名单 + 在列表 / 黑名单 + 不在列表 → true (允许)
+    /// - 白名单 + 不在列表 / 黑名单 + 在列表 → false (阻止)
+    func allowsApp(_ app: NSRunningApplication?) -> Bool {
+        let bundlePath = app?.bundleURL?.path
+        let execPath = app?.executableURL?.path
+        let inList = applications.contains { entry in
+            entry == bundlePath || entry == execPath
+        }
+        return allowlist ? inList : !inList
+    }
+
+    /// 单测用纯函数版本 (不依赖 NSRunningApplication).
+    static func computeAllowsApp(
+        allowlist: Bool,
+        applications: [String],
+        bundlePath: String? = nil,
+        executablePath: String? = nil
+    ) -> Bool {
+        let inList = applications.contains { entry in
+            entry == bundlePath || entry == executablePath
+        }
+        return allowlist ? inList : !inList
     }
 
     // MARK: - Decode-time 一致性校验 (UI 与 executor 必须看到同一个真相)
@@ -374,6 +427,9 @@ struct ButtonBinding: Codable, Equatable {
         self.createdAt = try c.decode(Date.self, forKey: .createdAt)
         let payload = try c.decodeIfPresent(OpenTargetPayload.self, forKey: .openTarget)
         self.openTarget = payload
+        // 旧版本无 scope 字段时默认 "白名单 + 空列表"; 用户必须显式开启.
+        self.allowlist = try c.decodeIfPresent(Bool.self, forKey: .allowlist) ?? true
+        self.applications = try c.decodeIfPresent([String].self, forKey: .applications) ?? []
 
         // 强制一致性: sentinel 与 payload 同时存在或同时不存在.
         let nameIsSentinel = (name == Self.openTargetSentinel)

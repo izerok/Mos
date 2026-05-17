@@ -98,9 +98,15 @@ class InputProcessor {
             return .passthrough
         }
 
-        // Down 事件: 完整匹配 (type + code + modifiers + deviceFilter)
+        // Down 事件: 完整匹配 (type + code + modifiers + deviceFilter + 应用作用域)
         let key = TriggerKey(type: event.type, code: event.code)
-        guard let binding = ButtonUtils.shared.getBestMatchingBinding(for: event) else {
+        // 解析当前目标 App: 优先从事件提取目标 PID (鼠标按键事件落到光标下窗口的 App),
+        // 退而求其次用 NSWorkspace.frontmost (HID++ 事件不带 PID, 键盘事件等同).
+        let targetApp = Self.resolveTargetApp(for: event)
+        guard let binding = ButtonUtils.shared.getBestMatchingBinding(
+            for: event,
+            where: { $0.allowsApp(targetApp) }
+        ) else {
             return .passthrough
         }
         guard let action = ShortcutExecutor.shared.resolveAction(
@@ -235,5 +241,17 @@ class InputProcessor {
             return true
         }
         return (NSEvent.pressedMouseButtons & (1 << Int(buttonNumber))) != 0
+    }
+
+    /// 解析事件对应的目标 App, 用于 per-binding scope 判定.
+    /// CGEvent 来源时优先用 `.eventTargetUnixProcessID` (落到光标下窗口的进程),
+    /// HID++ 来源或解析失败时退化到 `NSWorkspace.frontmost`.
+    static func resolveTargetApp(for event: InputEvent) -> NSRunningApplication? {
+        if case .cgEvent(let cgEvent) = event.source {
+            if let app = ScrollUtils.shared.getRunningApplication(from: cgEvent) {
+                return app
+            }
+        }
+        return NSWorkspace.shared.frontmostApplication
     }
 }

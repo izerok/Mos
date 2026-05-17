@@ -44,7 +44,6 @@ class ButtonCore {
         // Tap 被系统禁用时, 清理活跃绑定状态并直接放行
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
             InputProcessor.shared.clearActiveBindings()
-            ButtonUtils.shared.clearDispatchDecisions()
             return Unmanaged.passUnretained(event)
         }
         // 跳过 Mos 合成事件, 避免 executeCustom 发出的事件被重复处理
@@ -54,36 +53,6 @@ class ButtonCore {
 
         // 使用原始 flags 匹配绑定 (不注入虚拟修饰键, 保证匹配准确)
         let mosEvent = InputEvent(fromCGEvent: event)
-
-        // 应用作用域守门: 仅作用于"鼠标按键" binding.
-        // 键盘事件必须放行进入 InputProcessor, 否则虚拟修饰键 flags 注入会失效
-        // (此 tap 还承担 mouse-button-bound 修饰键的 flag 注入到 passthrough 键盘事件的职责).
-        if mosEvent.type == .mouse {
-            let allowedToDispatch: Bool
-            if mosEvent.phase == .down {
-                let targetApp = ScrollUtils.shared.getRunningApplication(from: event)
-                    ?? NSWorkspace.shared.frontmostApplication
-                allowedToDispatch = ButtonUtils.shared.shouldDispatch(for: targetApp)
-                ButtonUtils.shared.recordDispatchDecision(
-                    type: mosEvent.type, code: mosEvent.code, allowed: allowedToDispatch
-                )
-            } else {
-                // Up 事件: 优先使用按下时的判定; 没有 (孤儿 Up) 则按当前目标判.
-                if let recorded = ButtonUtils.shared.consumeDispatchDecision(
-                    type: mosEvent.type, code: mosEvent.code
-                ) {
-                    allowedToDispatch = recorded
-                } else {
-                    let targetApp = ScrollUtils.shared.getRunningApplication(from: event)
-                        ?? NSWorkspace.shared.frontmostApplication
-                    allowedToDispatch = ButtonUtils.shared.shouldDispatch(for: targetApp)
-                }
-            }
-            guard allowedToDispatch else {
-                return Unmanaged.passUnretained(event)
-            }
-        }
-
         let result = InputProcessor.shared.process(mosEvent)
         switch result {
         case .consumed:
@@ -155,7 +124,6 @@ class ButtonCore {
             dispatchInterceptor = nil
             primaryObservationInterceptor = nil
             InputProcessor.shared.clearActiveBindings()
-            ButtonUtils.shared.clearDispatchDecisions()
             isActive = false
         }
     }

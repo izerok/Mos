@@ -26,13 +26,13 @@ final class ButtonUtilsCacheTests: XCTestCase {
     }
 }
 
-// MARK: - Application-scope tests (whitelist / blacklist + hold-sequence cache)
-final class ButtonUtilsScopeTests: XCTestCase {
+// MARK: - Per-binding application-scope tests (whitelist / blacklist)
+final class ButtonBindingScopeTests: XCTestCase {
 
-    // computeShouldDispatch (pure function, no Options.shared dependency)
+    // MARK: - Pure-function logic (computeAllowsApp)
 
-    func testWhitelist_AppInList_byBundlePath_returnsTrue() {
-        let r = ButtonUtils.computeShouldDispatch(
+    func testWhitelist_BundlePathInList_returnsTrue() {
+        let r = ButtonBinding.computeAllowsApp(
             allowlist: true,
             applications: ["/Applications/Safari.app"],
             bundlePath: "/Applications/Safari.app",
@@ -41,8 +41,8 @@ final class ButtonUtilsScopeTests: XCTestCase {
         XCTAssertTrue(r)
     }
 
-    func testWhitelist_AppInList_byExecutablePath_returnsTrue() {
-        let r = ButtonUtils.computeShouldDispatch(
+    func testWhitelist_ExecutablePathInList_returnsTrue() {
+        let r = ButtonBinding.computeAllowsApp(
             allowlist: true,
             applications: ["/Applications/Safari.app/Contents/MacOS/Safari"],
             bundlePath: "/Applications/Safari.app",
@@ -52,7 +52,7 @@ final class ButtonUtilsScopeTests: XCTestCase {
     }
 
     func testWhitelist_AppNotInList_returnsFalse() {
-        let r = ButtonUtils.computeShouldDispatch(
+        let r = ButtonBinding.computeAllowsApp(
             allowlist: true,
             applications: ["/Applications/Safari.app"],
             bundlePath: "/Applications/Other.app",
@@ -62,7 +62,7 @@ final class ButtonUtilsScopeTests: XCTestCase {
     }
 
     func testWhitelist_NilPaths_returnsFalse() {
-        let r = ButtonUtils.computeShouldDispatch(
+        let r = ButtonBinding.computeAllowsApp(
             allowlist: true,
             applications: ["/anything.app"],
             bundlePath: nil,
@@ -72,7 +72,7 @@ final class ButtonUtilsScopeTests: XCTestCase {
     }
 
     func testWhitelist_EmptyList_returnsFalse() {
-        let r = ButtonUtils.computeShouldDispatch(
+        let r = ButtonBinding.computeAllowsApp(
             allowlist: true,
             applications: [],
             bundlePath: "/Applications/Safari.app",
@@ -82,7 +82,7 @@ final class ButtonUtilsScopeTests: XCTestCase {
     }
 
     func testBlacklist_AppInList_returnsFalse() {
-        let r = ButtonUtils.computeShouldDispatch(
+        let r = ButtonBinding.computeAllowsApp(
             allowlist: false,
             applications: ["/Applications/Safari.app"],
             bundlePath: "/Applications/Safari.app",
@@ -92,7 +92,7 @@ final class ButtonUtilsScopeTests: XCTestCase {
     }
 
     func testBlacklist_AppNotInList_returnsTrue() {
-        let r = ButtonUtils.computeShouldDispatch(
+        let r = ButtonBinding.computeAllowsApp(
             allowlist: false,
             applications: ["/Applications/Safari.app"],
             bundlePath: "/Applications/Other.app",
@@ -102,7 +102,7 @@ final class ButtonUtilsScopeTests: XCTestCase {
     }
 
     func testBlacklist_NilPaths_returnsTrue() {
-        let r = ButtonUtils.computeShouldDispatch(
+        let r = ButtonBinding.computeAllowsApp(
             allowlist: false,
             applications: ["/anything.app"],
             bundlePath: nil,
@@ -112,7 +112,7 @@ final class ButtonUtilsScopeTests: XCTestCase {
     }
 
     func testBlacklist_EmptyList_returnsTrue() {
-        let r = ButtonUtils.computeShouldDispatch(
+        let r = ButtonBinding.computeAllowsApp(
             allowlist: false,
             applications: [],
             bundlePath: "/Applications/Safari.app",
@@ -121,35 +121,59 @@ final class ButtonUtilsScopeTests: XCTestCase {
         XCTAssertTrue(r)
     }
 
-    // Hold-sequence cache: Down records, Up consumes
+    // MARK: - Initializer defaults (new bindings default to blacklist + empty = applies everywhere)
 
-    func testDispatchDecisionCache_RecordThenConsume() {
-        ButtonUtils.shared.clearDispatchDecisions()
-        ButtonUtils.shared.recordDispatchDecision(type: .mouse, code: 3, allowed: true)
-        XCTAssertEqual(ButtonUtils.shared.consumeDispatchDecision(type: .mouse, code: 3), true)
-        // Second consume returns nil (entry already removed)
-        XCTAssertNil(ButtonUtils.shared.consumeDispatchDecision(type: .mouse, code: 3))
+    func testNewBinding_DefaultsToBlacklistEmpty_appliesEverywhere() {
+        let trigger = RecordedEvent(type: .mouse, code: 3, modifiers: 0, displayComponents: ["🖱4"], deviceFilter: nil)
+        let binding = ButtonBinding(triggerEvent: trigger, systemShortcutName: "copy")
+        XCTAssertFalse(binding.allowlist, "New bindings should default to blacklist mode")
+        XCTAssertEqual(binding.applications, [], "New bindings should default to empty applications list")
+        // Sanity: with these defaults, every app should be allowed
+        XCTAssertTrue(ButtonBinding.computeAllowsApp(
+            allowlist: binding.allowlist,
+            applications: binding.applications,
+            bundlePath: "/some/random.app",
+            executablePath: nil
+        ))
     }
 
-    func testDispatchDecisionCache_BlockedRecorded() {
-        ButtonUtils.shared.clearDispatchDecisions()
-        ButtonUtils.shared.recordDispatchDecision(type: .mouse, code: 4, allowed: false)
-        XCTAssertEqual(ButtonUtils.shared.consumeDispatchDecision(type: .mouse, code: 4), false)
+    // MARK: - Codable backward-compat: legacy JSON without scope fields decodes to whitelist + empty
+
+    func testCodable_OldJSONWithoutScope_decodesToWhitelistEmpty() throws {
+        // 旧版 binding JSON: 只有 id/triggerEvent/systemShortcutName/isEnabled/createdAt 字段
+        let oldJSON = #"""
+        {
+          "id": "01234567-89AB-CDEF-0123-456789ABCDEF",
+          "triggerEvent": {
+            "type": "mouse",
+            "code": 3,
+            "modifiers": 0,
+            "displayComponents": ["🖱4"]
+          },
+          "systemShortcutName": "copy",
+          "isEnabled": true,
+          "createdAt": 750000000.0
+        }
+        """#
+        let data = oldJSON.data(using: .utf8)!
+        let decoder = JSONDecoder()
+        let binding = try decoder.decode(ButtonBinding.self, from: data)
+        XCTAssertTrue(binding.allowlist, "Decoded old JSON should default to whitelist mode (forces manual scope config)")
+        XCTAssertEqual(binding.applications, [])
+        // Sanity: whitelist + empty = doesn't fire in any app
+        XCTAssertFalse(binding.allowsApp(nil))
     }
 
-    func testDispatchDecisionCache_DifferentKeysIndependent() {
-        ButtonUtils.shared.clearDispatchDecisions()
-        ButtonUtils.shared.recordDispatchDecision(type: .mouse, code: 3, allowed: true)
-        ButtonUtils.shared.recordDispatchDecision(type: .keyboard, code: 3, allowed: false)
-        XCTAssertEqual(ButtonUtils.shared.consumeDispatchDecision(type: .mouse, code: 3), true)
-        XCTAssertEqual(ButtonUtils.shared.consumeDispatchDecision(type: .keyboard, code: 3), false)
-    }
-
-    func testDispatchDecisionCache_ClearRemovesAll() {
-        ButtonUtils.shared.recordDispatchDecision(type: .mouse, code: 3, allowed: true)
-        ButtonUtils.shared.recordDispatchDecision(type: .keyboard, code: 5, allowed: false)
-        ButtonUtils.shared.clearDispatchDecisions()
-        XCTAssertNil(ButtonUtils.shared.consumeDispatchDecision(type: .mouse, code: 3))
-        XCTAssertNil(ButtonUtils.shared.consumeDispatchDecision(type: .keyboard, code: 5))
+    func testCodable_NewJSONWithScope_roundTrips() throws {
+        let trigger = RecordedEvent(type: .mouse, code: 3, modifiers: 0, displayComponents: ["🖱4"], deviceFilter: nil)
+        var binding = ButtonBinding(triggerEvent: trigger, systemShortcutName: "copy", allowlist: true,
+                                    applications: ["/Applications/Safari.app", "/Applications/Notes.app"])
+        binding.isEnabled = true
+        let encoder = JSONEncoder()
+        let data = try encoder.encode(binding)
+        let decoder = JSONDecoder()
+        let decoded = try decoder.decode(ButtonBinding.self, from: data)
+        XCTAssertEqual(decoded.allowlist, true)
+        XCTAssertEqual(decoded.applications, ["/Applications/Safari.app", "/Applications/Notes.app"])
     }
 }

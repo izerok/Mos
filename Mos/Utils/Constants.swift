@@ -122,34 +122,6 @@ class OPTIONS_BUTTONS_DEFAULT: Codable {
     var binding:[ButtonBinding] = [] {
         didSet { Options.shared.saveOptions() }
     }
-    // 应用作用域: 默认白名单模式 + 空列表 (按键 binding 默认不生效, 需要用户手动加 app)
-    var allowlist: Bool = true {
-        didSet { Options.shared.saveOptions() }
-    }
-    var applications: [String] = [] {
-        didSet { Options.shared.saveOptions() }
-    }
-
-    enum CodingKeys: String, CodingKey {
-        case binding, allowlist, applications
-    }
-
-    init() {}
-
-    // 自定义 Codable: 兼容旧版 JSON (只有 binding 字段, 缺失字段走默认值)
-    required init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        binding = try c.decodeIfPresent([ButtonBinding].self, forKey: .binding) ?? []
-        allowlist = try c.decodeIfPresent(Bool.self, forKey: .allowlist) ?? true
-        applications = try c.decodeIfPresent([String].self, forKey: .applications) ?? []
-    }
-
-    func encode(to encoder: Encoder) throws {
-        var c = encoder.container(keyedBy: CodingKeys.self)
-        try c.encode(binding, forKey: .binding)
-        try c.encode(allowlist, forKey: .allowlist)
-        try c.encode(applications, forKey: .applications)
-    }
 }
 
 // 滚动

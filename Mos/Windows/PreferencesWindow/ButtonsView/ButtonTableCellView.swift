@@ -48,6 +48,14 @@ class ButtonTableCellView: NSTableCellView, NSMenuDelegate {
     /// 当用户从 PopUpButton 菜单选择 "打开…" 时触发,
     /// 由 PreferencesButtonsViewController 弹出 OpenTargetConfigPopover.
     private var onOpenTargetSelectionRequested: (() -> Void)?
+    /// 用户点击行内 "Apps (N)" 按钮触发, VC 弹出 per-binding 作用域 popover.
+    /// 第一参数为按钮 view (popover 锚定依据).
+    private var onScopeRequested: ((NSView) -> Void)?
+
+    // MARK: - Per-row Scope Button (programmatic)
+    /// 行内 scope 按钮: 显示 "Apps (N)" 形式, 点击弹出该 binding 的 scope 配置.
+    /// 第一次 configure 时懒创建并加 constraints; 后续 configure 只更新标题.
+    private var scopeButton: NSButton?
 
     // MARK: - Custom Recording
     private lazy var customRecorder: KeyRecorder = {
@@ -90,7 +98,8 @@ class ButtonTableCellView: NSTableCellView, NSMenuDelegate {
         onCustomShortcutRecorded: @escaping (String) -> Void,
         onOpenTargetSelectionRequested: @escaping () -> Void,
         onDeleteRequested: @escaping () -> Void,
-        onBindingUpdated: @escaping (ButtonBinding) -> Void = { _ in }
+        onBindingUpdated: @escaping (ButtonBinding) -> Void = { _ in },
+        onScopeRequested: @escaping (NSView) -> Void = { _ in }
     ) {
         // 保存回调
         self.onShortcutSelected = onShortcutSelected
@@ -98,6 +107,7 @@ class ButtonTableCellView: NSTableCellView, NSMenuDelegate {
         self.onCustomShortcutRecorded = onCustomShortcutRecorded
         self.onOpenTargetSelectionRequested = onOpenTargetSelectionRequested
         self.onBindingUpdated = onBindingUpdated
+        self.onScopeRequested = onScopeRequested
         // 清理可能残留的录制状态 (cell 复用时)
         customRecorder.stopRecording()
         isCustomRecordingActive = false
@@ -127,6 +137,43 @@ class ButtonTableCellView: NSTableCellView, NSMenuDelegate {
 
         // 订阅 Logitech session / reporting 通知, 保证设备状态变化时自动刷新
         registerConflictObservers()
+
+        // 行内 scope 按钮: 第一次创建, 之后只刷新标题
+        refreshScopeButton(binding: binding)
+    }
+
+    // MARK: - Scope Button (per-row)
+    private func refreshScopeButton(binding: ButtonBinding) {
+        if scopeButton == nil {
+            let btn = NSButton()
+            btn.translatesAutoresizingMaskIntoConstraints = false
+            btn.bezelStyle = .rounded
+            btn.controlSize = .mini
+            btn.font = .systemFont(ofSize: 10)
+            btn.target = self
+            btn.action = #selector(scopeButtonClicked(_:))
+            // 比 action popup 略低层级 (右上角小角标), 避免覆盖动作选择器内容.
+            addSubview(btn)
+            NSLayoutConstraint.activate([
+                btn.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
+                btn.topAnchor.constraint(equalTo: topAnchor, constant: 4),
+                btn.heightAnchor.constraint(equalToConstant: 16),
+                btn.widthAnchor.constraint(greaterThanOrEqualToConstant: 56),
+            ])
+            scopeButton = btn
+        }
+        // 标题: "✓ Apps (N)" 白名单 / "✗ Apps (N)" 黑名单, N 是列表中的 App 数量
+        let prefix = binding.allowlist ? "✓" : "✗"
+        scopeButton?.title = "\(prefix) Apps (\(binding.applications.count))"
+        scopeButton?.toolTip = binding.allowlist
+            ? NSLocalizedString("Whitelist mode: fires only in listed apps. Click to configure.",
+                                comment: "Tooltip on row scope button when whitelist mode")
+            : NSLocalizedString("Blacklist mode: disabled in listed apps. Click to configure.",
+                                comment: "Tooltip on row scope button when blacklist mode")
+    }
+
+    @objc private func scopeButtonClicked(_ sender: NSButton) {
+        onScopeRequested?(sender)
     }
 
     deinit {

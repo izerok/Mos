@@ -1,12 +1,14 @@
 ## Unreleased (fork: izerok/Mos)
 
 ## 新功能
-- 按键 binding 新增「作用 App」配置 (白名单/黑名单)。在 偏好设置 → 按键 页面右上角点 「Application Scope…」 打开配置弹窗, 可指定哪些 App 内按键映射生效。
-- 作用范围只对 **鼠标按键** 触发的 binding 生效; 键盘键触发的 binding 仍然全局执行 (避免破坏 mouse-button-as-modifier 注入到键盘事件的链路)。
+- 按键 binding 现在支持 **每个 binding 独立** 的应用作用域 (白名单/黑名单), 而不是所有 binding 共享一份全局列表。
+- 在 偏好设置 → 按键 的每行右上角, 新增 `Apps (N)` 小按钮 — `✓` 代表白名单, `✗` 代表黑名单, `N` 是配置的 App 数。
+- 点击该按钮弹出 popover, 可切换模式 (Whitelist / Blacklist) 并增删 App。
 
 ## ⚠️ 升级行为变化
-- 默认模式为「白名单 + 空列表」, 这意味着 **升级后鼠标按键映射默认全局失效**, 直到你在 Application Scope 里手动添加 App, 或把模式切到「黑名单」恢复原来的全局生效行为。
-- 数据不会丢失: 已有 ButtonBinding 仍然存在, 切回 黑名单 模式即可全局复用。
+- **新创建** 的 binding 默认 `Blacklist + 空列表` = 在所有 App 中生效 (符合直觉的"刚加好就能用"行为)。
+- **升级前已存在** 的 binding (从旧版本 UserDefaults 解码) 默认 `Whitelist + 空列表` = 不会触发, 必须显式打开 `Apps` 按钮添加 App, 或切到 `Blacklist` 模式才能恢复执行。
+- 数据不会丢失: 已有 ButtonBinding 仍然存在, scope 字段只是新增字段, 走 Codable decodeIfPresent。
 
 ---
 
