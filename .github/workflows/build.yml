@@ -78,6 +78,27 @@ jobs:
             ONLY_ACTIVE_ARCH=NO \
             build
 
+      # xcodebuild 默认只给 main binary linker-signed, 不会给 bundle 做
+      # _CodeSignature/CodeResources. 没 sealed resources 时 TCC 在 Sequoia+
+      # 会无法稳定记住授权 (跑日志会看到 "Failed to match existing code
+      # requirement"). 这里手动深度优先 ad-hoc 重签, 把 Sparkle 嵌套的 XPC /
+      # Updater.app / framework 一层层签透.
+      - name: Ad-hoc deep sign Release bundle
+        run: |
+          set -o pipefail
+          APP="build/DerivedData/Build/Products/Release/Mos.app"
+          SPARKLE="$APP/Contents/Frameworks/Sparkle.framework"
+          SPARKLE_VER=$(readlink "$SPARKLE/Versions/Current")
+          SPARKLE_REAL="$SPARKLE/Versions/$SPARKLE_VER"
+          # 深度优先: 最内层先签
+          codesign --force --sign - "$SPARKLE_REAL/XPCServices/Downloader.xpc"
+          codesign --force --sign - "$SPARKLE_REAL/XPCServices/Installer.xpc"
+          codesign --force --sign - "$SPARKLE_REAL/Updater.app"
+          codesign --force --sign - "$SPARKLE"
+          codesign --force --sign - "$APP"
+          echo "=== final signature ==="
+          codesign -dvvv "$APP" 2>&1 | head -15
+
       - name: Locate built Release app
         run: |
           PRODUCTS_DIR="build/DerivedData/Build/Products/Release"

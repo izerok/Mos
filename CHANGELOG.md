@@ -1,3 +1,11 @@
+# 4.3.1 (fork: izerok/Mos, 2026-05-17)
+
+## 修复
+- CI 构建产物现在做完整的深度 ad-hoc 签名 (递归签 Sparkle 嵌套的 XPC / Updater.app / framework, 主 app 收尾)。4.3.0 的产物仅有 linker-signed 主二进制, 没有 bundle 级 `_CodeSignature/CodeResources`, 导致在 macOS Sequoia+ 上 TCC 找不到稳定的 code requirement, 用户授权辅助功能后下次启动会再次要求授权。
+- 如果你的电脑上以前装过 Caldis 官方签名的 Mos 4.x, 系统 TCC.db 还留有 pinning 记录, 升级到本 fork 时需要先 `sudo tccutil reset Accessibility com.caldis.Mos` 清除老 pinning, 再授权一次。
+
+---
+
 # 4.3.0 (fork: izerok/Mos, 2026-05-17)
 
 ## 新功能
