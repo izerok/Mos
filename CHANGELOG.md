@@ -1,4 +1,4 @@
-## Unreleased (fork: izerok/Mos)
+# 4.3.0 (fork: izerok/Mos, 2026-05-17)
 
 ## 新功能
 - 按键 binding 现在支持 **每个 binding 独立** 的应用作用域 (白名单/黑名单), 而不是所有 binding 共享一份全局列表。
