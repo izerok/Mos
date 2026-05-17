@@ -20,7 +20,7 @@ concurrency:
 
 jobs:
   build:
-    name: Build & Test (macOS)
+    name: Test (Debug) + Build (Release)
     runs-on: macos-latest
 
     steps:
@@ -41,24 +41,9 @@ jobs:
             -project Mos.xcodeproj \
             -scheme Debug
 
-      - name: Build (Debug, code signing disabled)
-        run: |
-          set -o pipefail
-          xcodebuild \
-            -project Mos.xcodeproj \
-            -scheme Debug \
-            -configuration Debug \
-            -destination 'platform=macOS' \
-            -derivedDataPath build/DerivedData \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGN_IDENTITY="" \
-            CODE_SIGN_ENTITLEMENTS="" \
-            DEVELOPMENT_TEAM="" \
-            ONLY_ACTIVE_ARCH=NO \
-            build
-
-      - name: Run tests
+      # Tests stay on Debug — @testable imports + non-optimized assertions are
+      # more reliable, and the test plan is wired to the Debug configuration.
+      - name: Run tests (Debug)
         run: |
           set -o pipefail
           xcodebuild \
@@ -73,25 +58,46 @@ jobs:
             DEVELOPMENT_TEAM="" \
             test
 
-      - name: Locate built app
+      # Release build = the artifact we ship. PRODUCT_NAME=Mos (not Mos Debug),
+      # full optimization, code signing disabled (ad-hoc) so the workflow runs
+      # without secrets — users will need to allow the unsigned app once.
+      - name: Build (Release, code signing disabled)
         run: |
-          PRODUCTS_DIR="build/DerivedData/Build/Products/Debug"
+          set -o pipefail
+          xcodebuild \
+            -project Mos.xcodeproj \
+            -scheme Debug \
+            -configuration Release \
+            -destination 'platform=macOS' \
+            -derivedDataPath build/DerivedData \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGN_ENTITLEMENTS="" \
+            DEVELOPMENT_TEAM="" \
+            ONLY_ACTIVE_ARCH=NO \
+            build
+
+      - name: Locate built Release app
+        run: |
+          PRODUCTS_DIR="build/DerivedData/Build/Products/Release"
           echo "Contents of $PRODUCTS_DIR:"
           ls -la "$PRODUCTS_DIR"
           APP_PATH=$(find "$PRODUCTS_DIR" -maxdepth 1 -name "*.app" -type d | head -1)
           if [ -z "$APP_PATH" ]; then
-            echo "No .app bundle found"
+            echo "No .app bundle found in Release"
             exit 1
           fi
           echo "Found app at: $APP_PATH"
           ls -la "$APP_PATH/Contents/MacOS/"
           /usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$APP_PATH/Contents/Info.plist" || true
           /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$APP_PATH/Contents/Info.plist" || true
+          /usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$APP_PATH/Contents/Info.plist" || true
 
       - name: Upload built .app
         uses: actions/upload-artifact@v4
         with:
-          name: Mos-Debug-app
-          path: build/DerivedData/Build/Products/Debug/*.app
+          name: Mos-Release-app
+          path: build/DerivedData/Build/Products/Release/*.app
           retention-days: 14
           if-no-files-found: error
