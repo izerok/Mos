@@ -29,12 +29,18 @@ final class LogiIntegrationBridge: LogiExternalBridge {
         // Probe for logi* binding; the session executes the action so the
         // hardware action stays scoped to the originating device (no global
         // activeBindings registration).
-        if event.phase == .down,
-           let binding = ButtonUtils.shared.getBestMatchingBinding(
-               for: event,
-               where: { $0.systemShortcutName.hasPrefix("logi") }
-           ) {
-            return .logiAction(name: binding.systemShortcutName)
+        //
+        // 与 InputProcessor 一致: 必须按 per-binding application scope 过滤,
+        // 否则被 user scope 到特定 app 的 logi binding 会在其他 app 里依然
+        // 触发 HID 侧动作.
+        if event.phase == .down {
+            let targetApp = InputProcessor.resolveTargetApp(for: event)
+            if let binding = ButtonUtils.shared.getBestMatchingBinding(
+                for: event,
+                where: { $0.systemShortcutName.hasPrefix("logi") && $0.allowsApp(targetApp) }
+            ) {
+                return .logiAction(name: binding.systemShortcutName)
+            }
         }
 
         // Generic binding via InputProcessor (covers up phase + non-Logi

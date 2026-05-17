@@ -229,7 +229,10 @@ extension PreferencesButtonsViewController {
                 id: oldBinding.id,
                 triggerEvent: oldBinding.triggerEvent,
                 systemShortcutName: shortcut.identifier,
-                isEnabled: true
+                isEnabled: true,
+                createdAt: oldBinding.createdAt,
+                allowlist: oldBinding.allowlist,        // 保留 scope
+                applications: oldBinding.applications
             )
         } else {
             // 清除绑定:保持触发事件,清空快捷键名称并禁用
@@ -237,7 +240,10 @@ extension PreferencesButtonsViewController {
                 id: oldBinding.id,
                 triggerEvent: oldBinding.triggerEvent,
                 systemShortcutName: "",
-                isEnabled: false
+                isEnabled: false,
+                createdAt: oldBinding.createdAt,
+                allowlist: oldBinding.allowlist,        // 保留 scope
+                applications: oldBinding.applications
             )
         }
 
@@ -254,7 +260,9 @@ extension PreferencesButtonsViewController {
             triggerEvent: old.triggerEvent,
             systemShortcutName: name,
             isEnabled: true,
-            createdAt: old.createdAt
+            createdAt: old.createdAt,
+            allowlist: old.allowlist,                   // 保留 scope
+            applications: old.applications
         )
         syncViewWithOptions()
     }
@@ -268,7 +276,9 @@ extension PreferencesButtonsViewController {
             triggerEvent: old.triggerEvent,
             openTarget: payload,
             isEnabled: true,
-            createdAt: old.createdAt
+            createdAt: old.createdAt,
+            allowlist: old.allowlist,                   // 保留 scope
+            applications: old.applications
         )
         syncViewWithOptions()
         tableView.reloadData()
@@ -637,7 +647,9 @@ extension PreferencesButtonsViewController: KeyRecorderDelegate {
 
 // MARK: - Per-binding scope popover
 extension PreferencesButtonsViewController {
-    /// 由 ButtonTableCellView 行内"Apps (N)"按钮触发, 弹出该 binding 的 scope 编辑界面.
+    /// 由 Scope 列里的按钮触发, 弹出该 binding 的 scope 编辑界面.
+    /// popover 通过 onChange 回调把更新交给 replaceButtonBinding, 统一走 VC
+    /// 的 in-memory 缓存 + 持久化 + 表格刷新 (防止直写 Options.shared 被 sync 覆盖).
     fileprivate func presentScopePopover(forBindingID id: UUID, relativeTo source: NSView) {
         if let existing = scopePopover, existing.isShown {
             existing.performClose(nil)
@@ -645,7 +657,12 @@ extension PreferencesButtonsViewController {
         }
         let popover = NSPopover()
         popover.behavior = .transient
-        popover.contentViewController = ButtonScopePopoverViewController(bindingID: id)
+        popover.contentViewController = ButtonScopePopoverViewController(
+            bindingID: id,
+            onChange: { [weak self] updated in
+                self?.replaceButtonBinding(updated)
+            }
+        )
         popover.show(relativeTo: source.bounds, of: source, preferredEdge: .maxY)
         scopePopover = popover
     }

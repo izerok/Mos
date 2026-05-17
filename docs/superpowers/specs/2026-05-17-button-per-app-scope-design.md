@@ -1,204 +1,113 @@
-# Per-App Whitelist/Blacklist for Mouse Button Bindings
+# Per-Binding Application Scope for Mouse-Button Bindings
 
-**Status:** Design approved (pending spec review)
-**Date:** 2026-05-17
-**Targets repo:** [izerok/Mos](https://github.com/izerok/Mos) (fork of [Caldis/Mos](https://github.com/Caldis/Mos))
+**Status:** Implemented
+**Date:** 2026-05-17 (revised from an earlier global-scope design)
+**Repo:** [izerok/Mos](https://github.com/izerok/Mos) (fork of [Caldis/Mos](https://github.com/Caldis/Mos))
 **Branch base:** `master`
 
 ## Goal
 
-Let users restrict mouse-button bindings (the actions defined on the Buttons preferences page) to a chosen set of frontmost apps, with a single-list + mode-toggle model identical to the existing scroll-smoothing exception list.
+Let each individual `ButtonBinding` declare the set of apps it applies to (or is excluded from), instead of routing every binding through one shared global scope. Per-binding scope means a user can have "Button 4 → Back" active only in browsers while "Button 5 → Mission Control" stays global.
 
-## Out of scope
+## Design history
 
-- New action types (we keep the existing `SystemShortcut` actions verbatim)
-- Per-app *per-button* mappings (button bindings remain global; the list only gates whether bindings fire)
-- Sharing data with the scroll exception list (kept independent per user request)
-- Migration of existing users' settings (intentionally no migration — see "Upgrade behavior")
+An earlier iteration of this spec stored scope globally on `Options.shared.buttons.{allowlist,applications}` and gated dispatch inside the `ButtonCore` event tap. That design was implemented (commits `e252fae` / `26a4530`) and then fully reverted in commit `06666c8` after the user clarified that scope must be a property of each binding, not of all bindings together. This document describes the per-binding design that shipped.
 
-## Behavior
+## Data model
 
-### Storage (new `UserDefaults` keys, in `Options.swift`)
+`ButtonBinding` (struct, declared in `Mos/Windows/PreferencesWindow/ButtonsView/RecordedEvent.swift`) gains two stored fields:
 
-| Key | Type | Default | Meaning |
-|---|---|---|---|
-| `OptionItem.Button.Allowlist` | `Bool` | `true` | `true` = whitelist mode (bindings only fire in listed apps); `false` = blacklist mode (bindings fire everywhere except listed apps) |
-| `OptionItem.Button.Applications` | `String` (JSON-encoded `[String]`) | `"[]"` | List of app identifiers (bundle path or executable path, same scheme as scroll) |
+| Field | Type | Meaning |
+|---|---|---|
+| `allowlist` | `Bool` | `true` = whitelist mode (binding fires only in listed apps); `false` = blacklist mode (binding fires everywhere except listed apps). |
+| `applications` | `[String]` | List of app identifiers. Each entry is a bundle path **or** an executable path of an `NSRunningApplication`. |
 
-Accessed via new properties:
+Both fields are encoded via the existing `ButtonBinding` Codable conformance. `CodingKeys` includes them; the custom `init(from:)` uses `decodeIfPresent` so legacy JSON without these fields decodes successfully.
+
+### Default split
+
+| Path | Default | Rationale |
+|---|---|---|
+| New binding (any convenience `init(...)`) | `allowlist=false`, `applications=[]` | Equivalent to "all apps, no exceptions" — a freshly recorded binding works immediately without configuration. |
+| Decoded legacy binding (`init(from:)` with missing fields) | `allowlist=true`, `applications=[]` | Forces post-upgrade users to explicitly opt apps in. Prevents silent global firing of bindings whose intent the user can't recall after upgrade. |
+
+`Equatable` includes the two new fields. `replacingAction(from donor:)` and every `updateButtonBinding(id:...)` builder in `PreferencesButtonsViewController` preserves the existing binding's `allowlist`/`applications` rather than rebuilding from defaults — otherwise editing a binding's action would silently wipe its scope.
+
+## Decision logic
 
 ```swift
-extension Options {
-    struct Buttons {
-        var allowlist: Bool
-        var applications: [String]
+extension ButtonBinding {
+    func allowsApp(_ app: NSRunningApplication?) -> Bool {
+        let bundlePath = app?.bundleURL?.path
+        let execPath = app?.executableURL?.path
+        let inList = applications.contains { $0 == bundlePath || $0 == execPath }
+        return allowlist ? inList : !inList
     }
 }
 ```
 
-### Runtime decision
+Semantics (strict mode):
+- Unknown target app (`nil`) acts as "not in list" — whitelist blocks, blacklist allows.
+- Whitelist + empty list ⇒ never fires.
+- Blacklist + empty list ⇒ always fires.
 
-New file `Mos/ButtonCore/ButtonUtils.swift` (replacing the existing stub at lines 98–100):
+A pure-function variant `ButtonBinding.computeAllowsApp(allowlist:applications:bundlePath:executablePath:)` exists for unit testing without `NSRunningApplication`.
 
-```swift
-static func shouldDispatch(for app: NSRunningApplication?) -> Bool {
-    let id = app.flatMap { ScrollUtils.shared.getTargetApplication(from: $0) }
-    let inList = id.map { Options.shared.buttons.applications.contains($0) } ?? false
-    return Options.shared.buttons.allowlist ? inList : !inList
-}
-```
+## Integration points
 
-Semantics:
-- Unknown frontmost app (`nil`) is treated as "not in list" (strict mode per user choice)
-- Whitelist mode + empty list ⇒ bindings disabled globally (intentional default)
-- Blacklist mode + empty list ⇒ bindings enabled globally (matches old behavior)
+The scope check is applied at **every site that selects a binding for execution**:
 
-### Plug-in point
+| Site | File | Predicate composition |
+|---|---|---|
+| Main mouse / keyboard event dispatch | `Mos/InputEvent/InputProcessor.swift:106` | `{ $0.allowsApp(targetApp) }` |
+| Logi HID++ binding probe | `Mos/Integration/LogiIntegrationBridge.swift:33` | `{ $0.systemShortcutName.hasPrefix("logi") && $0.allowsApp(targetApp) }` |
+| `mosScroll`-defer probe in scroll path | `Mos/ScrollCore/ScrollCore.swift:383` | `{ ShortcutExecutor.isMosScrollActionIdentifier($0.systemShortcutName) && $0.allowsApp(targetApp) }` |
 
-In `ButtonCore.swift` `dispatchInterceptor` callback, before the existing `InputProcessor.shared.process(event)` call:
+All three resolve `targetApp` through `InputProcessor.resolveTargetApp(for:)`, which prefers the CGEvent's target PID (via `ScrollUtils.shared.getRunningApplication(from:)`) and falls back to `NSWorkspace.shared.frontmostApplication` for HID++ events.
 
-```swift
-let frontmost = NSWorkspace.shared.frontmostApplication
-guard ButtonUtils.shouldDispatch(for: frontmost) else {
-    return Unmanaged.passUnretained(event)   // forward unmodified
-}
-// ... existing dispatch logic
-```
-
-To handle hold sequences correctly (button-down in app A, switch to app B, button-up):
-
-- At `*MouseDown`, record the dispatch decision (allowed/not) keyed by `(buttonNumber, frontmostBundleID)`
-- At the paired `*MouseUp`, look up the recorded decision; if "not allowed" was recorded at down-time, also drop the up event
-- Cleared automatically on any subsequent unmatched `*MouseDown` of the same button
-
-Modifier-only events and key events do not pass through the button-dispatch path and are not affected.
+Up events do **not** re-check scope. `InputProcessor.activeBindings` is keyed by `(type, code)` and stores the action selected at Down; the paired Up release retrieves the action by key and emits the `.up` phase regardless of the current frontmost app. This avoids zombie active bindings when the user switches focus mid-hold.
 
 ## UI
 
-Append a new section to the existing `PreferencesButtonsViewController` view, below the current bindings table. Implemented **programmatically** (no xib).
+`Preferences → Buttons` gains a programmatic **Scope** column (`NSTableColumn`) inserted on the right of the existing storyboard-defined `Hotkey` column. The new column is fixed-width 100pt; the existing column auto-resizes to fill the rest.
 
-```
-┌── Buttons preferences ──────────────────────────────┐
-│ [Existing bindings table — unchanged]               │
-│ ┌─────────────────────────────────────────────────┐│
-│ │ Button4 → navigateBack    ✓ on                  ││
-│ │ Button5 → navigateForward ✓ on                  ││
-│ └─────────────────────────────────────────────────┘│
-│  [ + Binding ] [ − ]                                │
-│                                                       │
-│ ────────────────────────────────────────────────── │ ← visual separator
-│                                                       │
-│ Application scope                                    │
-│ Mode: [ Whitelist ▌ Blacklist ]    ← NSSegmentedControl
-│ ┌─────────────────────────────────────────────────┐│
-│ │ 🌐 Safari.app                                   ││
-│ │ 🟢 Google Chrome.app                            ││
-│ │ 💻 Code.app                                     ││
-│ └─────────────────────────────────────────────────┘│
-│  [ + App ] [ − ]                                    │
-│ (when whitelist + empty list:)                       │
-│   "No apps added — button bindings will not fire"    │
-└─────────────────────────────────────────────────────┘
-```
+Each row in the new column renders a small rounded button:
 
-Components:
+| Mode | Label |
+|---|---|
+| Whitelist | `✓ Apps (N)` |
+| Blacklist | `✗ Apps (N)` |
 
-- `NSSegmentedControl` for the mode toggle (whitelist / blacklist)
-- `NSTableView` for the app list (single column showing icon + display name)
-- Bottom toolbar: `+` opens `NSOpenPanel` filtered to `.app` bundles, default dir `/Applications`; `−` removes the selected row
-- Below the table, a contextual hint label that is hidden unless `allowlist=true && applications.isEmpty`
-- Row rendering reuses `Application.swift` helpers for icon/name lookup (no new helpers needed)
-- Controls write directly to `Options.shared.buttons.{allowlist,applications}` on change (mirroring how the existing scroll-exception UI persists)
+`N` is the count of entries in the binding's `applications`.
 
-## Localization
+Clicking the button presents `ButtonScopePopoverViewController` anchored to that row. The popover shows:
+- A title summarizing the binding (`Scope for {trigger} → {action}`).
+- A two-segment `NSSegmentedControl` for Whitelist / Blacklist.
+- An `NSTableView` listing the apps with their icons + display names.
+- `+` opens an `NSOpenPanel` filtered to `/Applications`; `−` removes the selected row.
+- A centered hint label that appears only in the awkward "whitelist + empty list" state (binding fires nowhere) so the user understands why nothing is happening.
 
-`NSLocalizedString(_:comment:)` only (min deployment 10.13, per `AGENTS.md`). Add to every existing `Localizable.strings` (en, zh-Hans, zh-Hant, ja, ko, ru, de, id):
+The popover **does not** write to `Options.shared.buttons.binding` directly. Every mutation flows back through an `onChange: (ButtonBinding) -> Void` callback that the parent view controller wires to `replaceButtonBinding(_:)`. This avoids the popover's writes being clobbered the next time the view controller syncs its in-memory `buttonBindings` snapshot back to `Options`.
 
-```
-"BUTTONS_SCOPE_TITLE"       = "Application scope";
-"BUTTONS_SCOPE_MODE_WHITE"  = "Whitelist";
-"BUTTONS_SCOPE_MODE_BLACK"  = "Blacklist";
-"BUTTONS_SCOPE_EMPTY_HINT"  = "No apps added — button bindings will not fire";
-```
+## Test coverage
 
-Chinese values:
+`MosTests/ButtonUtilsCacheTests.swift` adds class `ButtonBindingScopeTests`:
 
-```
-"BUTTONS_SCOPE_TITLE"       = "作用 App";
-"BUTTONS_SCOPE_MODE_WHITE"  = "白名单";
-"BUTTONS_SCOPE_MODE_BLACK"  = "黑名单";
-"BUTTONS_SCOPE_EMPTY_HINT"  = "未添加任何 App，按键映射当前不会生效";
-```
+- Whitelist × blacklist × in-list / not-in-list / empty / nil-paths (8 cases via `computeAllowsApp`).
+- New-binding initializer default: `allowlist=false`, `applications=[]`.
+- Codable round-trip: encode → decode preserves scope fields exactly.
+- Codable backward compat: decoding a JSON object without `allowlist`/`applications` keys yields `allowlist=true`, `applications=[]`.
 
-Other languages: pending translator pass during implementation; English fallback is acceptable for v1.
-
-## Testing
-
-Per `AGENTS.md` quality gates: Swift logic changes require relevant `MosTests` runs.
-
-New file `MosTests/ButtonUtilsTests.swift`:
-
-| Test name | Scenario | Expected |
-|---|---|---|
-| `testShouldDispatch_Whitelist_AppInList` | `allowlist=true`, list contains `app.path` | `true` |
-| `testShouldDispatch_Whitelist_AppNotInList` | `allowlist=true`, list omits `app.path` | `false` |
-| `testShouldDispatch_Whitelist_NilApp` | `allowlist=true`, frontmost = nil | `false` |
-| `testShouldDispatch_Whitelist_EmptyList` | `allowlist=true`, list empty | `false` |
-| `testShouldDispatch_Blacklist_AppInList` | `allowlist=false`, list contains `app.path` | `false` |
-| `testShouldDispatch_Blacklist_AppNotInList` | `allowlist=false`, list omits `app.path` | `true` |
-| `testShouldDispatch_Blacklist_NilApp` | `allowlist=false`, frontmost = nil | `true` |
-| `testShouldDispatch_Blacklist_EmptyList` | `allowlist=false`, list empty | `true` |
-| `testHoldSequence_DecisionCachedAtDown` | Down in app A (allowed), switch to app B (blocked), up; up event must drop | down=pass, up=dropped |
-
-Tests cover `ButtonUtils.shouldDispatch(for:)` by passing pre-canned `(allowlistFlag, applicationsList, frontmostPath)` triples directly. To make this possible the function is refactored to take its inputs (`allowlist`, `applications`, `frontmostPath`) as parameters in addition to the convenience overload that reads them from `Options.shared`. The hold-sequence cache is exposed via an injectable seam so tests can drive synthetic down/up sequences without a real CGEvent tap.
-
-Run before claiming done:
-
-```bash
-xcodebuild -scheme Debug -destination 'platform=macOS' test \
-  -only-testing:MosTests/ButtonUtilsTests
-```
-
-Also run the full Debug build to confirm no breakage:
-
-```bash
-xcodebuild -scheme Debug -configuration Debug -destination 'platform=macOS' build
-```
+CI runs `xcodebuild ... test` on macOS via `.github/workflows/build.yml`.
 
 ## Upgrade behavior
 
-**No migration.** Existing users who upgrade to this version will find their global button bindings stop firing until they add at least one app to the whitelist (or switch to blacklist mode).
+No data migration. Legacy bindings decoded without scope keys land on the safe default (whitelist + empty), surfacing the new control to the user via the now-empty `✓ Apps (0)` button. Switching the mode to `Blacklist` restores the upstream's pre-fork "fires everywhere" behavior in one click.
 
-This must be called out in release notes / `CHANGELOG.md`:
-
-> Button bindings are now scoped to a per-app list. After upgrading, button bindings will not fire until you add target apps in **Preferences → Buttons → Application scope** (or switch the mode to Blacklist for the previous global behavior).
-
-## Affected files
-
-| File | Δ lines | Note |
-|---|---|---|
-| `Mos/Options/Options.swift` | +20 | Two new `OptionItem` keys + `Options.Buttons.{allowlist,applications}` |
-| `Mos/ButtonCore/ButtonUtils.swift` | +35 | Replace nil-returning stub; add `shouldDispatch(for:)` + hold-sequence cache |
-| `Mos/ButtonCore/ButtonCore.swift` | +15 | Pre-dispatch guard in `dispatchInterceptor` |
-| `Mos/Windows/PreferencesWindow/ButtonsView/PreferencesButtonsViewController.swift` | +160 | New `ButtonsScopeView` programmatic NSView added to existing layout |
-| `Mos/Resources/{en,zh-Hans,zh-Hant,ja,ko,ru,de,id}.lproj/Localizable.strings` | +4 keys × 8 | Localization |
-| `MosTests/ButtonUtilsTests.swift` | +120 (new) | Unit tests |
-| `CHANGELOG.md` | +6 | Upgrade-behavior note |
-
-Estimated total: ~420 lines Swift + 32 strings.
-
-## Open questions
-
-None at design time. (All clarifying points resolved during brainstorming.)
+`CHANGELOG.md` carries the upgrade-behavior note.
 
 ## Approvals
 
-- Design discussed and approved interactively on 2026-05-17.
-- User decisions captured:
-  - Scope: side-button → action mapping with per-app gating
-  - List model: one list + mode toggle (separate from scroll list)
-  - Action set: reuse the existing `SystemShortcut` action catalog as-is
-  - Default: whitelist mode + empty list (opt-in)
-  - Unknown frontmost app: strict per-list (treated as "not in list")
-  - Upgrade migration: none
-  - UI: pure code (no xib)
+- Original brainstorming and design approval: 2026-05-17 (global-scope iteration, later rejected).
+- Per-binding redesign approval: 2026-05-17 (same day, after upstream review of the global iteration).
+- Code review (Critical/Important issues from review pass folded back into this spec): 2026-05-17.

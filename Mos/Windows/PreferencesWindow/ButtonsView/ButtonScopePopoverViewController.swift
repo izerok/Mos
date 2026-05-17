@@ -12,18 +12,24 @@ class ButtonScopePopoverViewController: NSViewController,
 
     // MARK: - Subject
 
-    /// 编辑目标 binding 的 ID. popover 通过 ID 查 Options.shared.buttons.binding,
-    /// 避免持有可能被替换 (struct copy) 的旧版本.
+    /// 编辑目标 binding 的 ID. popover 通过 ID 在 Options.shared.buttons.binding
+    /// 中查找最新版本, 避免持有 struct 拷贝.
     private let bindingID: UUID
 
-    init(bindingID: UUID) {
+    /// 改动回调: popover 不直接写 Options, 而是把更新后的 binding 交给 VC.
+    /// VC 通过 `replaceButtonBinding(_:)` 统一管理 in-memory 缓存 + 持久化 +
+    /// 表格刷新, 避免 VC 的 buttonBindings snapshot 被 popover 直写 clobber.
+    private let onChange: (ButtonBinding) -> Void
+
+    init(bindingID: UUID, onChange: @escaping (ButtonBinding) -> Void) {
         self.bindingID = bindingID
+        self.onChange = onChange
         super.init(nibName: nil, bundle: nil)
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) {
-        fatalError("init(coder:) is not supported, use init(bindingID:)")
+        fatalError("init(coder:) is not supported, use init(bindingID:onChange:)")
     }
 
     // MARK: - Subviews
@@ -42,17 +48,13 @@ class ButtonScopePopoverViewController: NSViewController,
         return Options.shared.buttons.binding.first(where: { $0.id == bindingID })
     }
 
-    private func currentBindingIndex() -> Int? {
-        return Options.shared.buttons.binding.firstIndex(where: { $0.id == bindingID })
-    }
-
+    /// 读取最新版本 → 在 struct 拷贝上 apply 变更 → 交给 onChange 回调.
+    /// 不直接写 Options.shared.buttons.binding (会被 VC 的 syncViewWithOptions
+    /// 中的旧 snapshot 覆盖, 导致改动丢失).
     private func mutate(_ block: (inout ButtonBinding) -> Void) {
-        guard let idx = currentBindingIndex() else { return }
-        // struct 数组中修改单个元素: 必须先取出 → 改 → 整体写回, 才能触发 didSet 保存
-        var bindings = Options.shared.buttons.binding
-        block(&bindings[idx])
-        Options.shared.buttons.binding = bindings
-        ButtonUtils.shared.invalidateCache()
+        guard var updated = currentBinding() else { return }
+        block(&updated)
+        onChange(updated)
     }
 
     // MARK: - Lifecycle

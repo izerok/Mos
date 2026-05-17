@@ -539,7 +539,9 @@ struct ButtonBinding: Codable, Equatable {
                lhs.systemShortcutName == rhs.systemShortcutName &&
                lhs.isEnabled == rhs.isEnabled &&
                lhs.createdAt == rhs.createdAt &&
-               lhs.openTarget == rhs.openTarget
+               lhs.openTarget == rhs.openTarget &&
+               lhs.allowlist == rhs.allowlist &&
+               lhs.applications == rhs.applications
     }
 }
 
@@ -579,13 +581,17 @@ private extension ButtonBinding {
     }
 
     func replacingAction(from donor: ButtonBinding) -> ButtonBinding {
+        // scope 字段从 self (被修改者) 携带, 不接受 donor 的覆盖 —
+        // 与 id/trigger/createdAt 一致 (这些都保留 self 的, 只有 action 字段取 donor)
         if let payload = donor.openTarget {
             return ButtonBinding(
                 id: id,
                 triggerEvent: triggerEvent,
                 openTarget: payload,
                 isEnabled: donor.isEnabled,
-                createdAt: createdAt
+                createdAt: createdAt,
+                allowlist: allowlist,
+                applications: applications
             )
         }
 
@@ -594,7 +600,9 @@ private extension ButtonBinding {
             triggerEvent: triggerEvent,
             systemShortcutName: donor.systemShortcutName,
             isEnabled: donor.isEnabled,
-            createdAt: createdAt
+            createdAt: createdAt,
+            allowlist: allowlist,
+            applications: applications
         )
     }
 }

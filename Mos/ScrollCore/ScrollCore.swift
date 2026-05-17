@@ -380,9 +380,13 @@ class ScrollCore {
 
     private func shouldDeferToMosScrollButtonBinding(_ event: CGEvent) -> Bool {
         let inputEvent = InputEvent(fromCGEvent: event)
+        // 必须包含 per-binding application scope 检查: 否则被 user scope 排除的
+        // mosScroll binding 仍会"占用"滚轮事件, 导致目标 app 里滚动被吞.
+        let targetApp = InputProcessor.resolveTargetApp(for: inputEvent)
         return ButtonUtils.shared.getBestMatchingBinding(
             for: inputEvent,
-            where: { ShortcutExecutor.isMosScrollActionIdentifier($0.systemShortcutName) }
+            where: { ShortcutExecutor.isMosScrollActionIdentifier($0.systemShortcutName)
+                  && $0.allowsApp(targetApp) }
         ) != nil
     }
     
