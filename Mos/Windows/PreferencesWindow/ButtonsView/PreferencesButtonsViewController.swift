@@ -53,9 +53,13 @@ class PreferencesButtonsViewController: NSViewController {
     /// spinner 上的 tracking area, 当 bounds 变化时需重建.
     private var activityTrackingArea: NSTrackingArea?
 
-    // MARK: - Per-binding Application Scope popover (programmatic)
-    /// 当前打开的 per-binding scope popover; 用于行级"Apps (N)"按钮.
+    // MARK: - Per-binding Application Scope (programmatic column)
+    /// 当前打开的 per-binding scope popover; 由 Scope 列里的按钮触发.
     private var scopePopover: NSPopover?
+    /// 程序化追加的 "Scope" 列 (storyboard 只有一列 "Hotkey").
+    /// 列宽固定 100pt, 居于 Hotkey 列右侧, 不依赖 storyboard.
+    private static let scopeColumnIdentifier = NSUserInterfaceItemIdentifier("scope")
+    private static let scopeColumnWidth: CGFloat = 100
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -67,6 +71,20 @@ class PreferencesButtonsViewController: NSViewController {
         loadOptionsToView()
         // 指示器: tooltip + 订阅 Manager 活动状态变化通知
         setupActivityIndicator()
+        // Scope 列: 程序化追加到表格右侧
+        setupScopeColumn()
+    }
+
+    /// 在表格右侧追加 Scope 列. 现有 Hotkey 列 resizeWithTable=YES 会自动让出空间.
+    private func setupScopeColumn() {
+        guard tableView.tableColumn(withIdentifier: Self.scopeColumnIdentifier) == nil else { return }
+        let column = NSTableColumn(identifier: Self.scopeColumnIdentifier)
+        column.title = NSLocalizedString("Scope", comment: "Header of the per-binding application scope column")
+        column.width = Self.scopeColumnWidth
+        column.minWidth = Self.scopeColumnWidth
+        column.maxWidth = Self.scopeColumnWidth
+        column.resizingMask = []
+        tableView.addTableColumn(column)
     }
 
     override func viewWillAppear() {
@@ -304,11 +322,16 @@ extension PreferencesButtonsViewController: NSTableViewDelegate, NSTableViewData
     // 表格数据源
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         guard let tableColumnIdentifier = tableColumn?.identifier else { return nil }
+        guard row < buttonBindings.count else { return nil }
+        let binding = buttonBindings[row]
 
-        // 创建 Cell
+        // Scope 列: 程序化追加 cell
+        if tableColumnIdentifier == Self.scopeColumnIdentifier {
+            return makeScopeCell(for: binding, row: row)
+        }
+
+        // Hotkey 列: storyboard prototype cell
         if let cell = tableView.makeView(withIdentifier: tableColumnIdentifier, owner: self) as? ButtonTableCellView {
-            let binding = buttonBindings[row]
-
             cell.configure(
                 with: binding,
                 onShortcutSelected: { [weak self] shortcut in
@@ -325,15 +348,53 @@ extension PreferencesButtonsViewController: NSTableViewDelegate, NSTableViewData
                 },
                 onBindingUpdated: { [weak self] updated in
                     self?.replaceButtonBinding(updated)
-                },
-                onScopeRequested: { [weak self] sourceView in
-                    self?.presentScopePopover(forBindingID: binding.id, relativeTo: sourceView)
                 }
             )
             return cell
         }
 
         return nil
+    }
+
+    /// 构造 Scope 列的单元格: 显示 "✓ Apps (N)" 白名单 / "✗ Apps (N)" 黑名单,
+    /// 点击打开该 binding 的 scope popover.
+    private func makeScopeCell(for binding: ButtonBinding, row: Int) -> NSView {
+        let cell = NSTableCellView()
+
+        let button = NSButton()
+        button.translatesAutoresizingMaskIntoConstraints = false
+        button.bezelStyle = .rounded
+        button.controlSize = .small
+        button.font = .systemFont(ofSize: 11)
+        let prefix = binding.allowlist ? "✓" : "✗"
+        button.title = "\(prefix) Apps (\(binding.applications.count))"
+        button.toolTip = binding.allowlist
+            ? NSLocalizedString(
+                "Whitelist mode: this binding fires only in listed apps. Click to configure.",
+                comment: "Tooltip on scope column button when whitelist mode")
+            : NSLocalizedString(
+                "Blacklist mode: this binding is disabled in listed apps. Click to configure.",
+                comment: "Tooltip on scope column button when blacklist mode")
+        button.target = self
+        button.action = #selector(scopeButtonClicked(_:))
+        button.tag = row
+
+        cell.addSubview(button)
+        NSLayoutConstraint.activate([
+            button.centerXAnchor.constraint(equalTo: cell.centerXAnchor),
+            button.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+            button.heightAnchor.constraint(equalToConstant: 22),
+            button.leadingAnchor.constraint(greaterThanOrEqualTo: cell.leadingAnchor, constant: 4),
+            button.trailingAnchor.constraint(lessThanOrEqualTo: cell.trailingAnchor, constant: -4),
+        ])
+        return cell
+    }
+
+    @objc private func scopeButtonClicked(_ sender: NSButton) {
+        let row = sender.tag
+        guard row >= 0, row < buttonBindings.count else { return }
+        let id = buttonBindings[row].id
+        presentScopePopover(forBindingID: id, relativeTo: sender)
     }
     
     // 行高
