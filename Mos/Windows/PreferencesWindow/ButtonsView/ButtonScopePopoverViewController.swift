@@ -201,7 +201,7 @@ class ButtonScopePopoverViewController: NSViewController,
             return
         }
         let trigger = binding.triggerEvent.displayComponents.joined(separator: " ")
-        let action = binding.systemShortcut?.title ?? binding.systemShortcutName
+        let action = binding.systemShortcut?.localizedName ?? binding.systemShortcutName
         let fmt = NSLocalizedString("Scope for %@ → %@", comment: "Title: trigger → action")
         titleLabel.stringValue = String(format: fmt, trigger, action)
         modeControl.selectedSegment = binding.allowlist ? 0 : 1
